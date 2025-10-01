@@ -1,0 +1,321 @@
+name: Build Firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_branch:
+        description: "Select the release branch:"
+        required: true
+        default: "immortalwrt:24.10.3"
+        type: choice
+        options:
+          - openwrt:24.10.3
+          - immortalwrt:24.10.3
+      openwrt_kernel:
+        description: "Select kernel version (Amlogic only)."
+        required: false
+        default: "6.12.y"
+        type: choice
+        options:
+          - 6.1.y
+          - 6.6.y
+          - 6.12.y
+      kernel_usage:
+        description: "Set the tags of the stable kernel (Amlogic only)."
+        required: false
+        default: "flippy"
+        type: choice
+        options:
+          - stable
+          - flippy
+      target:
+        description: "Select device board"
+        required: true
+        default: "All-device"
+        type: choice
+        options:
+          - All-device
+          - Amlogic s905x HG680P
+          - x86-64
+      clean:
+        description: "Do 'make clean' for each run"
+        required: false
+        default: "true"
+        type: boolean
+
+env:
+  TZ: Asia/Jakarta
+  WORKING_DIR: imagebuilder
+  DEBIAN_FRONTEND: noninteractive
+  TARGET: ${{ github.event.inputs.target }}
+  CLEAN: ${{ github.event.inputs.clean }}
+
+jobs:
+  prebuild:
+    runs-on: ubuntu-22.04
+    name: Setup Prebuild Environment
+    outputs:
+      target: ${{ steps.set-matrix.outputs.target }}
+      type: ${{ steps.setupenv.outputs.type }}
+      base: ${{ steps.setupenv.outputs.base }}
+      branch: ${{ steps.setupenv.outputs.branch }}
+      verop: ${{ steps.setupenv.outputs.verop }}
+      download_base: ${{ steps.setupenv.outputs.download_base }}
+      date: ${{ steps.setupenv.outputs.date }}
+      datetime: ${{ steps.setupenv.outputs.datetime }}
+      datemonth: ${{ steps.setupenv.outputs.datemonth }}
+      release_name: ${{ steps.setupenv.outputs.release_name }}
+      release_tag: ${{ steps.setupenv.outputs.release_tag }}
+
+    steps:
+      - name: Checkout (Public Repo)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Refresh and install needed packages
+        id: init
+        run: |
+          sudo tee /etc/apt/apt.conf.d/99parallel > /dev/null <<'EOF'
+          Acquire::Queue-Mode "access";
+          APT::Get::Max-Downloads "10";
+          Acquire::Retries "3";
+          EOF
+
+          sudo -E apt-get -y update
+          sudo -E apt-get -y install --no-install-recommends aria2 curl tar gzip unzip git wget jq $(curl -fsSL https://tinyurl.com/ubuntu2204-make-openwrt)
+
+      - name: Set Matrix Run
+        id: set-matrix
+        run: |
+          echo "Selected target option: [ ${{ github.event.inputs.target }} ]"
+          if [ "${{ github.event.inputs.target }}" == "All-device" ]; then
+            TARGET_JSON='["Amlogic s905x HG680P","x86-64"]'
+          else
+            TARGET_JSON=$(jq -nc --arg d "${{ github.event.inputs.target }}" '[$d]')
+          fi
+          echo "target=$TARGET_JSON" >> $GITHUB_OUTPUT
+
+      - name: Setup Environment
+        id: setupenv
+        run: |
+          sudo timedatectl set-timezone "${{ env.TZ }}"
+
+          INPUT_BRANCH="${{ github.event.inputs.release_branch }}"
+          BASE="${INPUT_BRANCH%%:*}"
+          BRANCH="${INPUT_BRANCH##*:}"
+          VEROP="$(echo "${BRANCH}" | awk -F. '{print $1"."$2}')"
+
+          DATE=$(date +'%d%m%Y')
+          DATETIME=$(date +'%d.%m.%Y-%H:%M:%S')
+          DATEMONTH=$(date +"%B-%Y" | awk '{print tolower($0)}')
+
+          if [ "${BASE}" == "openwrt" ]; then
+            RELEASE_NAME="OpenWRT-${BRANCH}"
+            RELEASE_TAG="openwrt_build"
+          else
+            RELEASE_NAME="ImmortalWRT-${BRANCH}"
+            RELEASE_TAG="immortalwrt_build"
+          fi
+
+          echo "base=$BASE" >> $GITHUB_OUTPUT
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "verop=$VEROP" >> $GITHUB_OUTPUT
+          echo "download_base=https://downloads.${BASE}.org" >> $GITHUB_OUTPUT
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "datetime=$DATETIME" >> $GITHUB_OUTPUT
+          echo "datemonth=$DATEMONTH" >> $GITHUB_OUTPUT
+          echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "status=success" >> $GITHUB_OUTPUT
+
+  build-firmware:
+    name: Build ${{ matrix.target }} Firmware
+    needs: prebuild
+    runs-on: ubuntu-22.04
+    env:
+      BASE: ${{ needs.prebuild.outputs.base }}
+      BRANCH: ${{ needs.prebuild.outputs.branch }}
+      VEROP: ${{ needs.prebuild.outputs.verop }}
+      DOWNLOAD_BASE: ${{ needs.prebuild.outputs.download_base }}
+      DATE: ${{ needs.prebuild.outputs.date }}
+      DATETIME: ${{ needs.prebuild.outputs.datetime }}
+      DATEMONTH: ${{ needs.prebuild.outputs.datemonth }}
+      RELEASE_NAME: ${{ needs.prebuild.outputs.release_name }}
+      RELEASE_TAG: ${{ needs.prebuild.outputs.release_tag }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        target: ${{ fromJSON(needs.prebuild.outputs.target) }}
+
+    steps:
+      - name: Checkout Private Repo (Firmware Source)
+        uses: actions/checkout@v5
+        with:
+          repository: KhoirulAmsori/openWRT-Firmware-Custom
+          path: origin
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 1
+
+      - name: Setup Build Variables
+        id: variables
+        run: |
+          MATRIXTARGET="${{ matrix.target }}"
+          echo "MATRIXTARGET=$MATRIXTARGET" >> $GITHUB_ENV
+
+          NAMA_MODIFIED=$(echo $MATRIXTARGET | sed 's/ /-/g')
+          echo "NAMA_MODIFIED=$NAMA_MODIFIED" >> $GITHUB_ENV
+
+          case $BASE in
+            openwrt) OP_BASE="OpenWRT" ;;
+            immortalwrt) OP_BASE="ImmortalWRT" ;;
+          esac
+          echo "OP_BASE=$OP_BASE" >> $GITHUB_ENV
+
+          case "$MATRIXTARGET" in
+            "Amlogic s905x HG680P")
+              echo "PROFILE=generic" >> $GITHUB_ENV
+              echo "TARGET_SYSTEM=armsr/armv8" >> $GITHUB_ENV
+              echo "TARGET_NAME=armsr-armv8" >> $GITHUB_ENV
+              echo "ARCH_1=arm64" >> $GITHUB_ENV
+              echo "ARCH_2=aarch64" >> $GITHUB_ENV
+              echo "ARCH_3=aarch64_generic" >> $GITHUB_ENV
+              echo "TARGET_BUILD=s905x" >> $GITHUB_ENV
+              echo "KERNEL=${{ github.event.inputs.openwrt_kernel }}" >> $GITHUB_ENV
+              echo "KERNEL_USAGE=${{ github.event.inputs.kernel_usage }}" >> $GITHUB_ENV
+              ;;
+            "x86-64")
+              echo "PROFILE=generic" >> $GITHUB_ENV
+              echo "TARGET_SYSTEM=x86/64" >> $GITHUB_ENV
+              echo "TARGET_NAME=x86-64" >> $GITHUB_ENV
+              echo "ARCH_1=amd64" >> $GITHUB_ENV
+              echo "ARCH_2=x86_64" >> $GITHUB_ENV
+              echo "ARCH_3=x86_64" >> $GITHUB_ENV
+              echo "TARGET_BUILD=x86-64" >> $GITHUB_ENV
+              ;;
+          esac
+
+          case "${{ matrix.target }}" in
+            *Amlogic*|"Amlogic s905x HG680P") echo "TYPE=OPHUB" >> $GITHUB_ENV ;;
+            *) echo "TYPE=NON-AMLOGIC" >> $GITHUB_ENV ;;
+          esac
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Prepare Image Builder, Apply Patches and Customizations
+        run: |
+          cd $GITHUB_WORKSPACE
+          CURVER=$(echo "${BRANCH}" | cut -d'.' -f1)
+          archive_ext=$([ "${CURVER}" == "24" ] && echo "tar.zst" || echo "tar.xz")
+          RELEASE="${DOWNLOAD_BASE}/releases/${BRANCH}/targets/${TARGET_SYSTEM}/${BASE}-imagebuilder-${BRANCH}-${TARGET_NAME}.Linux-x86_64.${archive_ext}"
+          echo "Downloading: ${RELEASE}"
+          wget -q "$RELEASE"
+
+          case "${archive_ext}" in
+            tar.xz)  tar -xJf *-imagebuilder-* && rm -f *-imagebuilder-*.tar.xz ;;
+            tar.zst) tar --use-compress-program=unzstd -xf *-imagebuilder-* && rm -f *-imagebuilder-*.tar.zst ;;
+          esac
+
+          mv *-imagebuilder-* $WORKING_DIR
+          cp -r origin/* $WORKING_DIR
+
+          cd ${{ env.WORKING_DIR }}
+          chmod +x SETUP.sh
+          ./SETUP.sh
+
+      - name: Build Firmware Images
+        run: |
+          echo "Build for ${{ matrix.target }}"
+          cd $WORKING_DIR
+          mkdir -p compiled_images
+
+          if [ "${CLEAN}" == "true" ]; then
+            make clean
+          fi
+
+          ./SETUP.sh build_image
+
+          if [[ "$TYPE" == "OPHUB" ]]; then
+            for file in bin/targets/"${TARGET_SYSTEM}"/*-rootfs.tar.gz; do
+              [ -f "$file" ] && mv "$file" compiled_images/$(basename "$file" -rootfs.tar.gz)-rootfs.tar.gz
+            done
+          else
+            for file in bin/targets/"${TARGET_SYSTEM}"/*.img.gz; do
+              [ -f "$file" ] && mv "$file" compiled_images/$(basename "$file")
+            done
+          fi
+
+          ls -lh compiled_images
+
+      - name: Repack OpenWrt (Ophub only)
+        if: contains(matrix.target, 'Amlogic')
+        run: |
+          cd $WORKING_DIR
+          ./SETUP.sh repack
+
+      - name: Rename and Check Compiled Images
+        run: |
+          cd $WORKING_DIR
+          ./SETUP.sh rename
+
+          cd compiled_images || exit 1
+          ls -lh
+          echo "Remove unused images."
+          rm -rf *rootfs*.*.gz
+          ls -lh
+          FILECOUNT=$(ls | wc -l)
+          if [ "$FILECOUNT" -eq 0 ]; then
+            echo "ERROR: No firmware images found to upload!"
+            exit 1
+          fi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.target }}
+          path: ${{ env.WORKING_DIR }}/compiled_images/**/*
+
+  upload-all:
+    name: Upload All Firmware to Draft Release
+    runs-on: ubuntu-22.04
+    needs: 
+      - prebuild
+      - build-firmware
+    steps:
+      - name: Get Date
+        id: datetime
+        run: |
+          sudo locale-gen id_ID.UTF-8
+          echo "build_date=$(LC_TIME=id_ID.UTF-8 date '+%A, %d %B %Y - %H:%M:%S')" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-images
+
+      - name: Flatten all firmware files
+        run: |
+          mkdir -p all-images/flattened
+          find all-images/ -type f -name '*.gz' -exec cp {} all-images/flattened/ \;
+
+      - name: Create and Upload Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GH_PAT }}
+          release_name: ${{ needs.prebuild.outputs.release_name }}
+          tag: ${{ needs.prebuild.outputs.release_tag }}
+          file_glob: true
+          overwrite: true
+          make_latest: true
+          file: all-images/flattened/*
+          body: |
+            ## Build Date: ${{ steps.datetime.outputs.build_date }} ##
+            ## Supported Devices: ##
+            - **Amlogic Series**: HG680P
+            - **x86 Series**: Generic PC
+
+      - name: Force latest release
+        run: |
+          gh release edit ${{ needs.prebuild.outputs.release_tag }} --latest --repo ${{ github.repository }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
