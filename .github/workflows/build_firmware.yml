@@ -56,6 +56,7 @@ jobs:
     name: Setup Prebuild Environment
     outputs:
       target: ${{ steps.set-matrix.outputs.target }}
+      type: ${{ steps.setupenv.outputs.type }}
       base: ${{ steps.setupenv.outputs.base }}
       branch: ${{ steps.setupenv.outputs.branch }}
       verop: ${{ steps.setupenv.outputs.verop }}
@@ -72,22 +73,8 @@ jobs:
         with:
           ref: ${{ github.ref_name }}
 
-      - name: Checkout Private Repo (Firmware Source)
-        uses: actions/checkout@v5
-        with:
-          repository: KhoirulAmsori/openWRT-Firmware-Custom
-          path: private-origin
-          token: ${{ secrets.GH_PAT }}
-          fetch-depth: 1
-
-      - name: Upload Private Source as Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: private-source
-          path: private-origin/**/*
-          retention-days: 1   # hanya perlu sementara, default 90 hari
-
       - name: Refresh and install needed packages
+        id: init
         run: |
           sudo tee /etc/apt/apt.conf.d/99parallel > /dev/null <<'EOF'
           Acquire::Queue-Mode "access";
@@ -101,6 +88,7 @@ jobs:
       - name: Set Matrix Run
         id: set-matrix
         run: |
+          echo "Selected target option: [ ${{ github.event.inputs.target }} ]"
           if [ "${{ github.event.inputs.target }}" == "All-device" ]; then
             TARGET_JSON='["Amlogic s905x HG680P","x86-64"]'
           else
@@ -162,11 +150,13 @@ jobs:
         target: ${{ fromJSON(needs.prebuild.outputs.target) }}
 
     steps:
-      - name: Download Private Source
-        uses: actions/download-artifact@v4
+      - name: Checkout Private Repo (Firmware Source)
+        uses: actions/checkout@v5
         with:
-          name: private-source
+          repository: KhoirulAmsori/openWRT-Firmware-Custom
           path: origin
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 1
 
       - name: Setup Build Variables
         id: variables
