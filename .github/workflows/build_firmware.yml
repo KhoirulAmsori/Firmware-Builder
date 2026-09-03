@@ -53,7 +53,7 @@ env:
 
 jobs:
   prebuild:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     name: Setup Prebuild Environment
     outputs:
       target: ${{ steps.set-matrix.outputs.target }}
@@ -84,7 +84,7 @@ jobs:
           EOF
 
           sudo -E apt-get -y update
-          sudo -E apt-get -y install --no-install-recommends aria2 curl tar gzip unzip git wget jq $(curl -fsSL https://tinyurl.com/ubuntu2204-make-openwrt)
+          sudo -E apt-get -y install --no-install-recommends aria2 curl tar gzip unzip git wget jq $(curl -fsSL https://tinyurl.com/ubuntu2404-make-openwrt)
 
       - name: Set Matrix Run
         id: set-matrix
@@ -133,7 +133,7 @@ jobs:
   build-firmware:
     name: Build ${{ matrix.target }} Firmware
     needs: prebuild
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     env:
       BASE: ${{ needs.prebuild.outputs.base }}
       BRANCH: ${{ needs.prebuild.outputs.branch }}
@@ -278,7 +278,7 @@ jobs:
 
   upload-all:
     name: Upload All Firmware to Draft Release
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: 
       - prebuild
       - build-firmware
