@@ -271,7 +271,7 @@ jobs:
           fi
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: firmware-${{ matrix.target }}
           path: ${{ env.WORKING_DIR }}/compiled_images/**/*
