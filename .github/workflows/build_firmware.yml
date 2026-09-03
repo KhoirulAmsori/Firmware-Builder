@@ -70,7 +70,7 @@ jobs:
 
     steps:
       - name: Checkout (Public Repo)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.ref_name }}
 
@@ -152,7 +152,7 @@ jobs:
 
     steps:
       - name: Checkout Private Repo (Firmware Source)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: KhoirulAmsori/openWRT-Firmware-Custom
           path: origin
