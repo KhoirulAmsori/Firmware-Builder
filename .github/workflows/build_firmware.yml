@@ -290,7 +290,7 @@ jobs:
           echo "build_date=$(LC_TIME=id_ID.UTF-8 date '+%A, %d %B %Y - %H:%M:%S')" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: all-images
 
